@@ -85,8 +85,12 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 context.dynamicRendering(), context.pushDescriptors(), context.multiDrawIndirect(),
                 context.fillModeNonSolid(), context.vertexAttributeDivisor());
         deviceInfo = new DeviceInfo(context.deviceName(), vendorName(context.properties().vendorID()),
-                "Vulkan driver 0x" + Integer.toHexString(context.properties().driverVersion()), true,
-                "LavaFlow Vulkan 1.1", limits.timestampPeriod(), blazeLimits, features,
+                "LavaFlow Vulkan driver 0x" + Integer.toHexString(context.properties().driverVersion()), true,
+                // Exactly "Vulkan", matching the name Minecraft's own backend reports. Mods select
+                // their Vulkan code paths by comparing this string with equals — Distant Horizons
+                // picks its OpenGL renderer for anything else — so a distinctive name here would
+                // route them onto paths that cannot run. LavaFlow identifies itself in driverInfo.
+                "Vulkan", limits.timestampPeriod(), blazeLimits, features,
                 Set.copyOf(backendExtensions),
                 new HintsAndWorkarounds(false, false), type);
         commandEncoder = new LavaFlowCommandEncoder(this);

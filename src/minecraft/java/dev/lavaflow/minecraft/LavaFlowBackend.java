@@ -48,8 +48,8 @@ public final class LavaFlowBackend implements GpuBackend {
         try {
             LOGGER.log(System.Logger.Level.INFO, "Using LavaFlow shaderc at {0}", LavaFlowShaderc.load());
             LavaFlowDevice device = new LavaFlowDevice(window, shaderSource);
-            LOGGER.log(System.Logger.Level.INFO, "Using graphics backend {0} on {1}",
-                    device.getDeviceInfo().backendName(), device.getDeviceInfo().name());
+            LOGGER.log(System.Logger.Level.INFO, "Using LavaFlow Vulkan 1.1 backend on {0}",
+                    device.getDeviceInfo().name());
             return new GpuDevice(device, onDeviceLost);
         } catch (RuntimeException failure) {
             throw new BackendCreationException(

@@ -17,6 +17,9 @@ config="lavaflow.mixins.json"
 [[mixins]]
 config="lavaflow-sodium.mixins.json"
 
+[[mixins]]
+config="lavaflow-dh.mixins.json"
+
 [[dependencies.lavaflow]]
 modId="neoforge"
 type="required"
