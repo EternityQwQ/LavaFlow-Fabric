@@ -85,7 +85,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
                 context.dynamicRendering(), context.pushDescriptors(), context.multiDrawIndirect(),
                 context.fillModeNonSolid(), context.vertexAttributeDivisor());
         deviceInfo = new DeviceInfo(context.deviceName(), vendorName(context.properties().vendorID()),
-                "Vulkan driver 0x" + Integer.toHexString(context.properties().driverVersion()), true,
+                driverInfo(context), true,
                 // Exactly "Vulkan", matching the name Minecraft's own backend reports. Mods select
                 // their Vulkan code paths by comparing this string with equals — Distant Horizons
                 // picks its OpenGL renderer for anything else — so a distinctive name here would
@@ -101,6 +101,22 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
             case 0x1002 -> "AMD"; case 0x10DE -> "NVIDIA"; case 0x8086 -> "Intel";
             case 0x13B5 -> "ARM"; case 0x5143 -> "Qualcomm"; default -> "0x" + Integer.toHexString(id);
         };
+    }
+
+    /**
+     * The debug-screen driver line: the device's Vulkan version, the LavaFlow identity, and the
+     * driver version, mirroring the "1.4.341 NVIDIA 610.43.03" shape of Minecraft's own backend.
+     * The backend name itself must stay exactly "Vulkan", so this line is where both belong.
+     */
+    private static String driverInfo(LavaFlowVulkanContext context) {
+        int api = context.properties().apiVersion();
+        int driver = context.properties().driverVersion();
+        // NVIDIA packs its driver version 10.8.8.6 instead of Vulkan's standard 10.10.12 split.
+        String driverVersion = context.properties().vendorID() == 0x10DE
+                ? (driver >>> 22) + "." + ((driver >>> 14) & 0xFF) + "." + ((driver >>> 6) & 0xFF)
+                : VK_VERSION_MAJOR(driver) + "." + VK_VERSION_MINOR(driver) + "." + VK_VERSION_PATCH(driver);
+        return VK_VERSION_MAJOR(api) + "." + VK_VERSION_MINOR(api) + "." + VK_VERSION_PATCH(api)
+                + " LavaFlow " + driverVersion;
     }
 
     LavaFlowVulkanContext context() { return context; }
