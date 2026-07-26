@@ -1,0 +1,121 @@
+package dev.lavaflow.minecraft.vulkan;
+
+import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.buffers.GpuBufferSlice;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VkBufferCreateInfo;
+import org.lwjgl.vulkan.VkMemoryAllocateInfo;
+import org.lwjgl.vulkan.VkMemoryRequirements;
+
+import java.nio.ByteBuffer;
+import java.nio.LongBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.system.MemoryUtil.NULL;
+import static org.lwjgl.vulkan.VK10.*;
+
+/** A directly mappable LavaFlow buffer with explicit Vulkan memory ownership. */
+final class LavaFlowGpuBuffer extends GpuBuffer {
+    private final LavaFlowDevice device;
+    private final LavaFlowVulkanContext context;
+    private final long buffer;
+    private final long memory;
+    private int mappingCount;
+    private boolean closed;
+
+    LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
+        super(usage, size);
+        if (size <= 0) throw new IllegalArgumentException("Buffer size must be positive");
+        this.device = device;
+        this.context = device.context();
+        long createdBuffer = NULL;
+        long allocatedMemory = NULL;
+        try (MemoryStack stack = stackPush()) {
+            VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default()
+                    .size(size).usage(LavaFlowVk.bufferUsage(usage)).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+            LongBuffer out = stack.mallocLong(1);
+            check(vkCreateBuffer(context.device(), info, null, out), "vkCreateBuffer");
+            createdBuffer = out.get(0);
+            VkMemoryRequirements requirements = VkMemoryRequirements.malloc(stack);
+            vkGetBufferMemoryRequirements(context.device(), createdBuffer, requirements);
+            boolean mapped = (usage & (USAGE_MAP_READ | USAGE_MAP_WRITE)) != 0;
+            int requiredMemory = mapped
+                    ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+                    : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default()
+                    .allocationSize(requirements.size())
+                    .memoryTypeIndex(context.findMemoryType(requirements.memoryTypeBits(), requiredMemory));
+            check(vkAllocateMemory(context.device(), allocation, null, out), "vkAllocateMemory(buffer)");
+            allocatedMemory = out.get(0);
+            check(vkBindBufferMemory(context.device(), createdBuffer, allocatedMemory, 0), "vkBindBufferMemory");
+        } catch (Throwable failure) {
+            if (allocatedMemory != NULL) vkFreeMemory(context.device(), allocatedMemory, null);
+            if (createdBuffer != NULL) vkDestroyBuffer(context.device(), createdBuffer, null);
+            throw failure;
+        }
+        buffer = createdBuffer;
+        memory = allocatedMemory;
+    }
+
+    private static void check(int result, String operation) {
+        if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
+    }
+
+    long handle() { return buffer; }
+    long memory() { return memory; }
+
+    synchronized void write(long offset, ByteBuffer source) {
+        if (closed) throw new IllegalStateException("Buffer is closed");
+        if ((usage() & USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not host writable");
+        if (offset < 0 || offset + source.remaining() > size()) throw new IllegalArgumentException("Write exceeds buffer");
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pointer = stack.mallocPointer(1);
+            check(vkMapMemory(context.device(), memory, offset, source.remaining(), 0, pointer), "vkMapMemory(write)");
+            MemoryUtil.memCopy(MemoryUtil.memAddress(source) + source.position(), pointer.get(0), source.remaining());
+            vkUnmapMemory(context.device(), memory);
+        }
+    }
+
+    @Override public synchronized GpuBufferSlice.MappedView map(long offset, long length, boolean read, boolean write) {
+        if (closed) throw new IllegalStateException("Buffer is closed");
+        if (!read && !write) throw new IllegalArgumentException("At least read or write must be requested");
+        if (read && (usage() & USAGE_MAP_READ) == 0) throw new IllegalStateException("Buffer is not readable");
+        if (write && (usage() & USAGE_MAP_WRITE) == 0) throw new IllegalStateException("Buffer is not writable");
+        if (offset < 0 || length < 0 || offset + length > size()) throw new IllegalArgumentException("Invalid mapped range");
+        if (length > Integer.MAX_VALUE) throw new IllegalArgumentException("Mappings larger than 2 GiB are unsupported");
+        if (mappingCount != 0) throw new IllegalStateException("Concurrent mappings of one buffer are unsupported");
+        try (MemoryStack stack = stackPush()) {
+            PointerBuffer pointer = stack.mallocPointer(1);
+            check(vkMapMemory(context.device(), memory, offset, length, 0, pointer), "vkMapMemory");
+            mappingCount = 1;
+            ByteBuffer data = MemoryUtil.memByteBuffer(pointer.get(0), (int)length);
+            AtomicBoolean released = new AtomicBoolean();
+            return new GpuBufferSlice.MappedView(new GpuBufferSlice(this, offset, length), data, () -> {
+                if (released.compareAndSet(false, true)) unmap();
+            });
+        }
+    }
+
+    private synchronized void unmap() {
+        if (mappingCount == 0) return;
+        vkUnmapMemory(context.device(), memory);
+        mappingCount = 0;
+    }
+
+    @Override public synchronized boolean isClosed() { return closed; }
+
+    @Override public synchronized void close() {
+        if (closed) return;
+        if (mappingCount != 0) throw new IllegalStateException("Cannot close a mapped buffer");
+        closed = true;
+        device.defer(this::destroyNow);
+    }
+
+    private void destroyNow() {
+        vkDestroyBuffer(context.device(), buffer, null);
+        vkFreeMemory(context.device(), memory, null);
+    }
+}

@@ -1,0 +1,204 @@
+package dev.lavaflow.minecraft.vulkan;
+
+import com.mojang.blaze3d.GpuFormat;
+import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.shaders.ShaderSource;
+import com.mojang.blaze3d.shaders.ShaderType;
+import com.mojang.blaze3d.systems.*;
+import com.mojang.blaze3d.textures.*;
+import net.minecraft.resources.Identifier;
+import org.lwjgl.vulkan.VkPhysicalDeviceLimits;
+
+import java.nio.ByteBuffer;
+import java.util.*;
+import java.util.function.Supplier;
+
+import static org.lwjgl.vulkan.VK10.*;
+
+/** Minecraft-facing device backed only by LavaFlow-owned Vulkan objects. */
+public final class LavaFlowDevice implements GpuDeviceBackend {
+    private static final System.Logger LOGGER = System.getLogger(LavaFlowDevice.class.getName());
+    private final LavaFlowVulkanContext context;
+    private final ShaderSource shaderSource;
+    private final DeviceInfo deviceInfo;
+    private final LavaFlowCommandEncoder commandEncoder;
+    private List<AutoCloseable> deferred = new ArrayList<>();
+    private List<Runnable> callbacks = new ArrayList<>();
+    private SubmitBatch completingBatch;
+    private final Map<RenderPipeline, LavaFlowRenderPipeline> pipelines = new IdentityHashMap<>();
+    private final Map<ShaderKey, String> shaderSources = new HashMap<>();
+    private RenderPipeline lastPipelineInfo;
+    private LavaFlowRenderPipeline lastPipeline;
+    private boolean closed;
+
+    private record ShaderKey(Identifier id, ShaderType type) {}
+    static final class SubmitBatch {
+        final List<AutoCloseable> resources;
+        final List<Runnable> callbacks;
+
+        SubmitBatch(List<AutoCloseable> resources, List<Runnable> callbacks) {
+            this.resources = resources;
+            this.callbacks = callbacks;
+        }
+    }
+
+    public LavaFlowDevice(long window, ShaderSource shaderSource) {
+        this.context = new LavaFlowVulkanContext(window);
+        this.shaderSource = shaderSource;
+        VkPhysicalDeviceLimits limits = context.properties().limits();
+        int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());
+        long maxMemoryAllocationSize = context.maxMemoryAllocationSize();
+        if (maxMemoryAllocationSize < 0) maxMemoryAllocationSize = Long.MAX_VALUE;
+        DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
+                limits.maxImageDimension2D(), maxMemoryAllocationSize, 0, limits.maxColorAttachments());
+        DeviceFeatures features = new DeviceFeatures(false, false, false, false, false, false, true);
+        DeviceType type = switch (context.properties().deviceType()) {
+            case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
+            case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
+            case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU -> DeviceType.VIRTUAL;
+            case VK_PHYSICAL_DEVICE_TYPE_CPU -> DeviceType.CPU;
+            default -> DeviceType.OTHER;
+        };
+        Set<String> backendExtensions = new HashSet<>();
+        backendExtensions.add("VK_KHR_swapchain");
+        if (context.pushDescriptors()) backendExtensions.add("VK_KHR_push_descriptor");
+        if (context.dynamicRendering()) backendExtensions.add("VK_KHR_dynamic_rendering");
+        if (context.vertexAttributeDivisor()) backendExtensions.add("VK_EXT_vertex_attribute_divisor");
+        LOGGER.log(System.Logger.Level.INFO,
+                "Vulkan capabilities: dynamicRendering={0}, pushDescriptors={1}, multiDrawIndirect={2}, "
+                        + "fillModeNonSolid={3}, vertexAttributeDivisor={4}",
+                context.dynamicRendering(), context.pushDescriptors(), context.multiDrawIndirect(),
+                context.fillModeNonSolid(), context.vertexAttributeDivisor());
+        deviceInfo = new DeviceInfo(context.deviceName(), vendorName(context.properties().vendorID()),
+                "Vulkan driver 0x" + Integer.toHexString(context.properties().driverVersion()), true,
+                "LavaFlow Vulkan 1.1", limits.timestampPeriod(), blazeLimits, features,
+                Set.copyOf(backendExtensions),
+                new HintsAndWorkarounds(false, false), type);
+        commandEncoder = new LavaFlowCommandEncoder(this);
+    }
+
+    private static String vendorName(int id) {
+        return switch (id) {
+            case 0x1002 -> "AMD"; case 0x10DE -> "NVIDIA"; case 0x8086 -> "Intel";
+            case 0x13B5 -> "ARM"; case 0x5143 -> "Qualcomm"; default -> "0x" + Integer.toHexString(id);
+        };
+    }
+
+    LavaFlowVulkanContext context() { return context; }
+    synchronized void defer(AutoCloseable resource) {
+        (completingBatch == null ? deferred : completingBatch.resources).add(resource);
+    }
+    synchronized void afterSubmit(Runnable callback) { callbacks.add(callback); }
+    synchronized SubmitBatch detachSubmitBatch(AutoCloseable transientResources) {
+        if (transientResources != null) deferred.add(transientResources);
+        if (deferred.isEmpty() && callbacks.isEmpty()) return null;
+        SubmitBatch batch = new SubmitBatch(deferred, callbacks);
+        deferred = new ArrayList<>();
+        callbacks = new ArrayList<>();
+        return batch;
+    }
+    synchronized void completeSubmit(SubmitBatch batch) {
+        if (batch == null) return;
+        RuntimeException failure = null;
+        completingBatch = batch;
+        int resourceIndex = 0;
+        for (; resourceIndex < batch.resources.size(); resourceIndex++) {
+            try {
+                batch.resources.get(resourceIndex).close();
+            } catch (Exception e) {
+                failure = new RuntimeException(e);
+            }
+        }
+        for (Runnable callback : batch.callbacks) callback.run();
+        for (; resourceIndex < batch.resources.size(); resourceIndex++) {
+            try {
+                batch.resources.get(resourceIndex).close();
+            } catch (Exception e) {
+                failure = new RuntimeException(e);
+            }
+        }
+        completingBatch = null;
+        if (failure != null) throw failure;
+    }
+    synchronized void completePending() { completeSubmit(detachSubmitBatch(null)); }
+
+    @Override public GpuSurfaceBackend createSurface(long window) {
+        if (window == 0) throw new IllegalArgumentException("window must be valid");
+        return new LavaFlowGpuSurface(this, window);
+    }
+    @Override public CommandEncoderBackend createCommandEncoder() { ensureOpen(); return commandEncoder; }
+    @Override public GpuSampler createSampler(AddressMode u, AddressMode v, FilterMode min, FilterMode mag, int anisotropy, OptionalDouble maxLod) {
+        ensureOpen(); return new LavaFlowGpuSampler(this, u, v, min, mag, anisotropy, maxLod);
+    }
+    @Override public GpuTexture createTexture(Supplier<String> label, int usage, GpuFormat format, int width, int height, int layers, int mips) {
+        return createTexture(label == null ? "" : label.get(), usage, format, width, height, layers, mips);
+    }
+    @Override public GpuTexture createTexture(String label, int usage, GpuFormat format, int width, int height, int layers, int mips) {
+        ensureOpen(); return new LavaFlowGpuTexture(this, usage, label, format, width, height, layers, mips);
+    }
+    @Override public GpuTextureView createTextureView(GpuTexture texture) { return createTextureView(texture, 0, texture.getMipLevels()); }
+    @Override public GpuTextureView createTextureView(GpuTexture texture, int baseMip, int mips) {
+        ensureOpen(); return new LavaFlowGpuTextureView(this, (LavaFlowGpuTexture)texture, baseMip, mips);
+    }
+    @Override public GpuBuffer createBuffer(Supplier<String> label, int usage, long size) {
+        ensureOpen(); return new LavaFlowGpuBuffer(this, usage, size);
+    }
+    @Override public GpuBuffer createBuffer(Supplier<String> label, int usage, ByteBuffer initialData) {
+        LavaFlowGpuBuffer buffer = new LavaFlowGpuBuffer(this, usage | GpuBuffer.USAGE_COPY_DST,
+                initialData.remaining());
+        commandEncoder.writeToBuffer(buffer.slice(), initialData);
+        return buffer;
+    }
+    @Override public List<String> getLastDebugMessages() { return List.of(); }
+    @Override public boolean isDebuggingEnabled() { return false; }
+    @Override public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, ShaderSource source) {
+        ensureOpen();
+        return pipelines.computeIfAbsent(pipeline,
+                ignored -> new LavaFlowRenderPipeline(this, pipeline, source == null ? shaderSource : source));
+    }
+
+    synchronized String shaderText(Identifier id, ShaderType type, ShaderSource preferredSource) {
+        ShaderKey key = new ShaderKey(id, type);
+        String text = preferredSource == null ? null : preferredSource.get(id, type);
+        if (text == null && preferredSource != shaderSource && shaderSource != null) {
+            text = shaderSource.get(id, type);
+        }
+        if (text != null) {
+            shaderSources.put(key, text);
+            return text;
+        }
+        return shaderSources.get(key);
+    }
+    LavaFlowRenderPipeline pipeline(RenderPipeline pipeline) {
+        if (pipeline == lastPipelineInfo) return lastPipeline;
+        return findPipeline(pipeline);
+    }
+    private synchronized LavaFlowRenderPipeline findPipeline(RenderPipeline pipeline) {
+        ensureOpen();
+        LavaFlowRenderPipeline result = pipelines.computeIfAbsent(pipeline,
+                ignored -> new LavaFlowRenderPipeline(this, pipeline, shaderSource));
+        lastPipelineInfo = pipeline;
+        lastPipeline = result;
+        return result;
+    }
+    @Override public synchronized void clearPipelineCache() {
+        lastPipelineInfo = null;
+        lastPipeline = null;
+        for (LavaFlowRenderPipeline pipeline : pipelines.values()) pipeline.close();
+        pipelines.clear();
+    }
+    @Override public GpuQueryPool createTimestampQueryPool(int size) { return new LavaFlowQueryPool(context, size); }
+    @Override public long getTimestampNow() { return System.nanoTime(); }
+    @Override public DeviceInfo getDeviceInfo() { return deviceInfo; }
+
+    private void ensureOpen() { if (closed) throw new IllegalStateException("LavaFlow device is closed"); }
+    @Override public synchronized void close() {
+        if (closed) return; closed = true;
+        commandEncoder.destroy();
+        clearPipelineCache();
+        completePending();
+        context.close();
+    }
+}
