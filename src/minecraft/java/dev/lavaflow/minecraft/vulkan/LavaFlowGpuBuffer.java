@@ -24,6 +24,10 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
     private final long buffer;
     private final long memory;
     private int mappingCount;
+    // Physical base of the mapping such that address of buffer position x = mappedPhysicalBase + x.
+    // Zero when the buffer is not mapped. Volatile so the render-thread draw path can read it without
+    // a lock: map() and unmap() are synchronized but drawIndexedIndirect runs on the same thread.
+    volatile long mappedPhysicalBase;
     private boolean closed;
 
     LavaFlowGpuBuffer(LavaFlowDevice device, int usage, long size) {
@@ -45,9 +49,15 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             int requiredMemory = mapped
                     ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
                     : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            // Indirect parameters may be read back by the backend when the device cannot batch indirect
+            // draws, and mapped buffers requesting reads obviously are. Uncached host memory makes those
+            // reads cost orders of magnitude more than cached memory, so ask for cached in both cases.
+            int preferredMemory = mapped && (usage & (USAGE_MAP_READ | USAGE_INDIRECT_PARAMETERS)) != 0
+                    ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0;
             VkMemoryAllocateInfo allocation = VkMemoryAllocateInfo.calloc(stack).sType$Default()
                     .allocationSize(requirements.size())
-                    .memoryTypeIndex(context.findMemoryType(requirements.memoryTypeBits(), requiredMemory));
+                    .memoryTypeIndex(context.findMemoryType(requirements.memoryTypeBits(), requiredMemory,
+                            preferredMemory));
             check(vkAllocateMemory(context.device(), allocation, null, out), "vkAllocateMemory(buffer)");
             allocatedMemory = out.get(0);
             check(vkBindBufferMemory(context.device(), createdBuffer, allocatedMemory, 0), "vkBindBufferMemory");
@@ -91,6 +101,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
             PointerBuffer pointer = stack.mallocPointer(1);
             check(vkMapMemory(context.device(), memory, offset, length, 0, pointer), "vkMapMemory");
             mappingCount = 1;
+            mappedPhysicalBase = pointer.get(0) - offset;
             ByteBuffer data = MemoryUtil.memByteBuffer(pointer.get(0), (int)length);
             AtomicBoolean released = new AtomicBoolean();
             return new GpuBufferSlice.MappedView(new GpuBufferSlice(this, offset, length), data, () -> {
@@ -101,6 +112,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
 
     private synchronized void unmap() {
         if (mappingCount == 0) return;
+        mappedPhysicalBase = 0;
         vkUnmapMemory(context.device(), memory);
         mappingCount = 0;
     }
@@ -111,6 +123,7 @@ final class LavaFlowGpuBuffer extends GpuBuffer {
         if (closed) return;
         if (mappingCount != 0) throw new IllegalStateException("Cannot close a mapped buffer");
         closed = true;
+        device.invalidateDescriptorCache(buffer);
         device.defer(this::destroyNow);
     }
 

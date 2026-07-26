@@ -221,8 +221,15 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
             }
         }
         if (physicalDevice == null) throw new IllegalStateException("No Vulkan 1.1 presentation device found");
-        if (Boolean.getBoolean("lavaflow.forceDescriptorSets")) pushDescriptors = false;
-        if (Boolean.getBoolean("lavaflow.forceLegacyRenderPass")) dynamicRendering = false;
+        // lavaflow.baselineDevice emulates a device that exposes nothing beyond VK_KHR_swapchain, which is
+        // what the ARM64 Android targets report. It exists so the fallback paths can be exercised and
+        // profiled on a desktop GPU that would otherwise take every extension path.
+        boolean baselineDevice = Boolean.getBoolean("lavaflow.baselineDevice");
+        if (baselineDevice || Boolean.getBoolean("lavaflow.forceDescriptorSets")) pushDescriptors = false;
+        if (baselineDevice || Boolean.getBoolean("lavaflow.forceLegacyRenderPass")) dynamicRendering = false;
+        if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoMultiDrawIndirect")) multiDrawIndirect = false;
+        if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoVertexAttributeDivisor")) vertexAttributeDivisor = false;
+        if (baselineDevice || Boolean.getBoolean("lavaflow.forceNoFillModeNonSolid")) fillModeNonSolid = false;
         queryVulkan11Properties();
     }
 
@@ -359,11 +366,30 @@ public final class LavaFlowVulkanContext implements AutoCloseable {
     }
 
     int findMemoryType(int typeBits, int requiredFlags) {
+        return findMemoryType(typeBits, requiredFlags, 0);
+    }
+
+    /**
+     * Selects a memory type, preferring one that also carries {@code preferredFlags}.
+     *
+     * <p>Several required-flag combinations match more than one heap. Host-visible memory in
+     * particular is commonly exposed both uncached, where the CPU writes are write-combined and reads
+     * are very slow, and host-cached. Which one a buffer wants depends on whether anything reads it
+     * back, so the caller states a preference and falls back to any match.
+     */
+    int findMemoryType(int typeBits, int requiredFlags, int preferredFlags) {
         try (MemoryStack stack = stackPush()) {
             VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.malloc(stack);
             vkGetPhysicalDeviceMemoryProperties(physicalDevice, memory);
-            for (int i = 0; i < memory.memoryTypeCount(); i++)
-                if ((typeBits & (1 << i)) != 0 && (memory.memoryTypes(i).propertyFlags() & requiredFlags) == requiredFlags) return i;
+            int fallback = -1;
+            for (int i = 0; i < memory.memoryTypeCount(); i++) {
+                if ((typeBits & (1 << i)) == 0) continue;
+                int flags = memory.memoryTypes(i).propertyFlags();
+                if ((flags & requiredFlags) != requiredFlags) continue;
+                if (preferredFlags != 0 && (flags & preferredFlags) == preferredFlags) return i;
+                if (fallback < 0) fallback = i;
+            }
+            if (fallback >= 0) return fallback;
         }
         throw new IllegalStateException("No compatible Vulkan memory type for flags 0x" + Integer.toHexString(requiredFlags));
     }

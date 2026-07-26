@@ -4,6 +4,8 @@
   "compatibilityLevel": "JAVA_25",
   "package": "dev.lavaflow.minecraft.mixin",
   "client": [
+    "FrameStatsMixin",
+    "FramerateLimitMixin",
     "PreferredGraphicsApiMixin"
   ],
   "injectors": {

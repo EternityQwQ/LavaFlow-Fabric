@@ -7,6 +7,7 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import org.joml.Vector4fc;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
@@ -37,78 +38,21 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     private long recordingSerial = 1;
     private long completedSerial;
     private boolean destroyed;
+    private long readbackScratch;
+    private int readbackScratchBytes;
 
     private static final class SubmitSlot {
         final VkCommandBuffer commandBuffer;
         final long fence;
         final LavaFlowTransientMemory transientMemory;
-        final DescriptorArena descriptors;
         LavaFlowDevice.SubmitBatch batch;
         long serial;
         boolean inFlight;
 
-        SubmitSlot(VkCommandBuffer commandBuffer, long fence, LavaFlowTransientMemory transientMemory,
-                   DescriptorArena descriptors) {
+        SubmitSlot(VkCommandBuffer commandBuffer, long fence, LavaFlowTransientMemory transientMemory) {
             this.commandBuffer = commandBuffer;
             this.fence = fence;
             this.transientMemory = transientMemory;
-            this.descriptors = descriptors;
-        }
-    }
-
-    private static final class DescriptorArena {
-        private static final int SETS_PER_POOL = 1024;
-        private final LavaFlowVulkanContext context;
-        private final List<Long> pools = new ArrayList<>(1);
-        private int poolIndex;
-
-        DescriptorArena(LavaFlowVulkanContext context) {
-            this.context = context;
-            pools.add(createPool());
-        }
-
-        long allocate(long layout) {
-            try (MemoryStack stack = stackPush()) {
-                while (true) {
-                    VkDescriptorSetAllocateInfo allocation = VkDescriptorSetAllocateInfo.calloc(stack)
-                            .sType$Default().descriptorPool(pools.get(poolIndex))
-                            .pSetLayouts(stack.longs(layout));
-                    LongBuffer out = stack.mallocLong(1);
-                    int result = vkAllocateDescriptorSets(context.device(), allocation, out);
-                    if (result == VK_SUCCESS) return out.get(0);
-                    if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL) {
-                        throw new IllegalStateException("vkAllocateDescriptorSets failed with VkResult " + result);
-                    }
-                    poolIndex++;
-                    if (poolIndex == pools.size()) pools.add(createPool());
-                }
-            }
-        }
-
-        void reset() {
-            for (int i = 0; i <= poolIndex; i++) {
-                check(vkResetDescriptorPool(context.device(), pools.get(i), 0), "vkResetDescriptorPool");
-            }
-            poolIndex = 0;
-        }
-
-        void destroy() {
-            for (long pool : pools) vkDestroyDescriptorPool(context.device(), pool, null);
-            pools.clear();
-        }
-
-        private long createPool() {
-            try (MemoryStack stack = stackPush()) {
-                VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(3, stack);
-                sizes.get(0).type(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(SETS_PER_POOL * 8);
-                sizes.get(1).type(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(SETS_PER_POOL * 4);
-                sizes.get(2).type(VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER).descriptorCount(SETS_PER_POOL * 2);
-                VkDescriptorPoolCreateInfo info = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
-                        .maxSets(SETS_PER_POOL).pPoolSizes(sizes);
-                LongBuffer out = stack.mallocLong(1);
-                check(vkCreateDescriptorPool(context.device(), info, null, out), "vkCreateDescriptorPool(fallback)");
-                return out.get(0);
-            }
         }
     }
 
@@ -135,8 +79,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             for (int i = 0; i < SUBMIT_SLOTS; i++) {
                 check(vkCreateFence(context.device(), fenceInfo, null, fenceOut), "vkCreateFence(submit)");
                 slots[i] = new SubmitSlot(new VkCommandBuffer(out.get(i), context.device()),
-                        fenceOut.get(0), new LavaFlowTransientMemory(device, this),
-                        context.pushDescriptors() ? null : new DescriptorArena(context));
+                        fenceOut.get(0), new LavaFlowTransientMemory(device, this));
             }
         }
     }
@@ -154,7 +97,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             device.completeSubmit(slot.batch);
             slot.batch = null;
         }
-        if (slot.descriptors != null) slot.descriptors.reset();
         slot.transientMemory.recycle();
         check(vkResetCommandBuffer(slot.commandBuffer, 0), "vkResetCommandBuffer");
         try (MemoryStack stack = stackPush()) {
@@ -168,11 +110,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
 
     VkCommandBuffer commandBuffer() { return commandBuffer; }
     LavaFlowDevice device() { return device; }
-    long allocateDescriptorSet(long layout) {
-        if (slot.descriptors == null) throw new IllegalStateException("Push descriptors are enabled");
-        return slot.descriptors.allocate(layout);
-    }
-
     void waitFor(long semaphore) {
         if (waitSemaphore != NULL) throw new IllegalStateException("Only one surface acquire is supported per submit");
         waitSemaphore = semaphore;
@@ -196,6 +133,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
             if (signalSemaphore != NULL) submit.pSignalSemaphores(stack.longs(signalSemaphore));
             check(vkQueueSubmit(context.graphicsQueue(), submit, slot.fence), "vkQueueSubmit");
         }
+        LavaFlowFrameStats.workSubmitted();
         slot.batch = device.detachSubmitBatch(transientMemory.retire());
         slot.serial = recordingSerial++;
         slot.inFlight = true;
@@ -203,10 +141,35 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
         prepareSlot((slotIndex + 1) % SUBMIT_SLOTS);
     }
 
+    /**
+     * Returns a scratch allocation of at least {@code bytes}, reused across calls.
+     *
+     * <p>Host-visible device memory is typically write-combined, where scattered narrow reads are far
+     * more expensive than one sequential bulk copy. Callers that need to inspect such memory copy the
+     * whole range here first and read from the result, which is ordinary cached memory. Grows
+     * monotonically so the render loop performs no allocation once warm.
+     */
+    long readbackScratch(int bytes) {
+        if (bytes > readbackScratchBytes) {
+            int capacity = Math.max(bytes, Math.max(readbackScratchBytes * 2, 4096));
+            long grown = MemoryUtil.nmemAlignedAlloc(64, capacity);
+            if (grown == NULL) throw new IllegalStateException("Out of memory growing readback scratch");
+            if (readbackScratch != NULL) MemoryUtil.nmemAlignedFree(readbackScratch);
+            readbackScratch = grown;
+            readbackScratchBytes = capacity;
+        }
+        return readbackScratch;
+    }
+
     void destroy() {
         if (destroyed) return;
         if (renderPassOpen) submitRenderPass();
         destroyed = true;
+        if (readbackScratch != NULL) {
+            MemoryUtil.nmemAlignedFree(readbackScratch);
+            readbackScratch = NULL;
+            readbackScratchBytes = 0;
+        }
         for (SubmitSlot submitSlot : slots) {
             if (submitSlot == null) continue;
             if (submitSlot.inFlight) {
@@ -218,7 +181,6 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                 submitSlot.batch = null;
             }
             submitSlot.transientMemory.destroy();
-            if (submitSlot.descriptors != null) submitSlot.descriptors.destroy();
             vkDestroyFence(context.device(), submitSlot.fence, null);
         }
         for (SubmitSlot submitSlot : slots) {
@@ -238,11 +200,10 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     }
     @Override public void submitRenderPass() {
         if (renderPassOpen) {
-            if (context.dynamicRendering()) vkCmdEndRenderingKHR(commandBuffer);
-            else vkCmdEndRenderPass(commandBuffer);
             renderPassOpen = false;
-            activeRenderPass.finish();
+            LavaFlowRenderPass pass = activeRenderPass;
             activeRenderPass = null;
+            pass.end();
         }
     }
 
@@ -251,6 +212,7 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
     void transition(LavaFlowGpuTexture texture, int targetLayout) {
         int sourceLayout = texture.layout();
         if (sourceLayout == targetLayout) return;
+        LavaFlowFrameStats.barrierRecorded();
         try (MemoryStack stack = stackPush()) {
             VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack).sType$Default()
                     .oldLayout(sourceLayout).newLayout(targetLayout)
@@ -294,6 +256,9 @@ final class LavaFlowCommandEncoder implements CommandEncoderBackend {
                     .withDepthAttachment(depthView)
                     .withRenderArea(new RenderPass.RenderArea(0, 0, color.getWidth(0), color.getHeight(0)));
             createRenderPass(descriptor);
+            // vkCmdClearAttachments is recorded directly rather than through a draw, so the pass has
+            // to be begun explicitly.
+            activeRenderPass.ensureBegun();
             try (MemoryStack stack = stackPush()) {
                 VkClearRect.Buffer rect = VkClearRect.calloc(1, stack).baseArrayLayer(0).layerCount(1);
                 rect.rect().offset().set(x, y);

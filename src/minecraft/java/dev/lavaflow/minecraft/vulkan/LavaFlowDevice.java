@@ -31,6 +31,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     private final Map<ShaderKey, String> shaderSources = new HashMap<>();
     private RenderPipeline lastPipelineInfo;
     private LavaFlowRenderPipeline lastPipeline;
+    private LavaFlowDescriptorCache descriptorCache;
     private boolean closed;
 
     private record ShaderKey(Identifier id, ShaderType type) {}
@@ -47,16 +48,25 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     public LavaFlowDevice(long window, ShaderSource shaderSource) {
         this.context = new LavaFlowVulkanContext(window);
         this.shaderSource = shaderSource;
+        this.descriptorCache = new LavaFlowDescriptorCache(context, this);
         VkPhysicalDeviceLimits limits = context.properties().limits();
         int maxAnisotropy = Math.max(1, (int)limits.maxSamplerAnisotropy());
         long maxMemoryAllocationSize = context.maxMemoryAllocationSize();
         if (maxMemoryAllocationSize < 0) maxMemoryAllocationSize = Long.MAX_VALUE;
+        // Interleaved multi-draw is emulated as a loop of single indexed draws, so no device limit
+        // constrains how many draws one call may carry.
+        int maxInterleavedDraws = Integer.MAX_VALUE;
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
-                limits.maxImageDimension2D(), maxMemoryAllocationSize, 0, limits.maxColorAttachments());
-        // multiDrawIndirect and drawIndirect are always advertised: LavaFlow's render pass falls back to
-        // a loop of single-draw indirect commands on devices without the core multiDrawIndirect feature,
-        // so the Blaze3D-level capability holds either way.
-        DeviceFeatures features = new DeviceFeatures(false, false, false, true, true, false, true);
+                limits.maxImageDimension2D(), maxMemoryAllocationSize, maxInterleavedDraws,
+                limits.maxColorAttachments());
+        // The multi-draw capabilities describe what LavaFlow's render pass accepts, not what the Vulkan
+        // device exposes natively. Each is emulated with a loop of core Vulkan commands when the device
+        // lacks the corresponding feature, so the Blaze3D-level capability holds on every supported
+        // device. Advertising multiDrawDirectInterleaved matters for throughput: it lets callers pack
+        // draws into a plain CPU array instead of an indirect-parameter buffer, which on tile-based GPUs
+        // is host-visible memory the GPU has to read back once per draw.
+        boolean multiDrawDirectInterleaved = !Boolean.getBoolean("lavaflow.forceNoMultiDrawDirect");
+        DeviceFeatures features = new DeviceFeatures(false, multiDrawDirectInterleaved, false, true, true, false, true);
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;
@@ -90,6 +100,14 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     }
 
     LavaFlowVulkanContext context() { return context; }
+    LavaFlowDescriptorCache descriptorCache() { return descriptorCache; }
+
+    /**
+     * Retires the cached descriptor sets and buffer views that reference {@code handle}, because
+     * that resource is going away. Called from resource destruction.
+     */
+    void invalidateDescriptorCache(long handle) { descriptorCache.invalidate(handle); }
+
     synchronized void defer(AutoCloseable resource) {
         (completingBatch == null ? deferred : completingBatch.resources).add(resource);
     }
@@ -191,6 +209,9 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         lastPipeline = null;
         for (LavaFlowRenderPipeline pipeline : pipelines.values()) pipeline.close();
         pipelines.clear();
+        // Set layout handles may be reused by the replacement pipelines, so cached sets keyed on the
+        // old handles must not survive.
+        descriptorCache.invalidateAll();
     }
     @Override public GpuQueryPool createTimestampQueryPool(int size) { return new LavaFlowQueryPool(context, size); }
     @Override public long getTimestampNow() { return System.nanoTime(); }
@@ -202,6 +223,7 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         commandEncoder.destroy();
         clearPipelineCache();
         completePending();
+        descriptorCache.destroy();
         context.close();
     }
 }

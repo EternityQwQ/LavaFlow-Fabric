@@ -21,6 +21,6 @@ abstract class DrawBackendMixin {
     private static void lavaflow$chooseVulkanBackend(CallbackInfoReturnable<DrawBackend> callback) {
         if (!LavaFlowSodium.isLavaFlowDevice()) return;
         LavaFlowSodium.install();
-        callback.setReturnValue(DrawBackend.VK_INDIRECT);
+        callback.setReturnValue(LavaFlowSodium.drawBackend());
     }
 }

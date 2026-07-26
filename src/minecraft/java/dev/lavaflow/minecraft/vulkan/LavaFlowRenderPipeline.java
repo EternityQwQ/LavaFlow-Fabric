@@ -45,6 +45,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     private long[] legacyRenderPasses = new long[4];
     private long[] legacyPipelines = new long[4];
     private int legacyPipelineCount;
+    private final boolean dynamicUniforms;
     private boolean closed;
 
     LavaFlowRenderPipeline(LavaFlowDevice device, RenderPipeline info, ShaderSource source) {
@@ -53,6 +54,14 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         this.source = source;
         this.entries = buildEntries(info);
         this.entryIndices = buildEntryIndices(entries);
+        int uniformCount = 0;
+        for (Entry entry : entries) {
+            if (entry.type() == EntryType.UNIFORM_BUFFER) uniformCount++;
+        }
+        // Push descriptor sets may not contain dynamic uniform buffers, so dynamic offsets are only
+        // used on the descriptor-set path, and only while within the device's dynamic-buffer limit.
+        this.dynamicUniforms = !device.context().pushDescriptors()
+                && uniformCount <= device.context().properties().limits().maxDescriptorSetUniformBuffersDynamic();
 
         long createdVertex = 0, createdFragment = 0, createdSetLayout = 0, createdPipelineLayout = 0;
         try {
@@ -182,7 +191,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         try (MemoryStack stack = stackPush()) {
             VkDescriptorSetLayoutBinding.Buffer bindings = VkDescriptorSetLayoutBinding.calloc(entries.size(), stack);
             for (int i = 0; i < entries.size(); i++) {
-                bindings.get(i).binding(i).descriptorCount(1).descriptorType(descriptorType(entries.get(i).type))
+                bindings.get(i).binding(i).descriptorCount(1).descriptorType(vkDescriptorType(entries.get(i).type))
                         .stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
             }
             VkDescriptorSetLayoutCreateInfo info = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default()
@@ -372,13 +381,23 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
                 .alphaBlendOp(LavaFlowVk.blendOp(blend.alpha().op()));
     }
 
-    static int descriptorType(EntryType type) {
+    /**
+     * The Vulkan descriptor type backing {@code type} in this pipeline's layout.
+     *
+     * <p>On the descriptor-set path uniform buffers are dynamic: their byte offset is supplied at
+     * bind time instead of being written into the set, so a set stays reusable across draws that
+     * only move within a buffer — which is how Blaze3D delivers per-draw uniforms.
+     */
+    int vkDescriptorType(EntryType type) {
         return switch (type) {
-            case UNIFORM_BUFFER -> VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case UNIFORM_BUFFER -> dynamicUniforms
+                    ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             case SAMPLED_IMAGE -> VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             case TEXEL_BUFFER -> VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
         };
     }
+
+    boolean dynamicUniforms() { return dynamicUniforms; }
 
     private static void check(int result, String operation) {
         if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);

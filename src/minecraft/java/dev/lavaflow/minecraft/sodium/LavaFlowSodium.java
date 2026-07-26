@@ -9,6 +9,7 @@ import dev.lavaflow.minecraft.sodium.mixin.RenderPassBackendAccessor;
 import dev.lavaflow.minecraft.vulkan.LavaFlowDevice;
 import dev.lavaflow.minecraft.vulkan.LavaFlowPushConstants;
 import dev.lavaflow.minecraft.vulkan.LavaFlowVulkanPass;
+import net.caffeinemc.mods.sodium.client.gpu.device.backend.DrawBackend;
 import net.caffeinemc.mods.sodium.client.gpu.device.context.DrawContext;
 
 /**
@@ -50,6 +51,21 @@ public final class LavaFlowSodium {
                 pipeline.getLocation().getNamespace().contains("sodium") ? range : 0);
         LOGGER.log(System.Logger.Level.INFO,
                 "Sodium compatibility active: reserving {0} push-constant bytes for Sodium pipelines", range);
+    }
+
+    /**
+     * Picks the Sodium draw path for LavaFlow.
+     *
+     * <p>Prefers the interleaved multi-draw path, which packs draws into a plain CPU array. The
+     * indirect path would instead route them through a mapped indirect-parameter buffer, costing a
+     * per-region copy into host-visible memory and a GPU parameter fetch per draw. Falls back to the
+     * indirect path if LavaFlow reports the interleaved capability as unavailable.
+     */
+    public static DrawBackend drawBackend() {
+        boolean interleaved = RenderSystem.getDevice().getDeviceInfo().features().multiDrawDirectInterleaved();
+        DrawBackend backend = interleaved ? DrawBackend.VK_MULTIDRAW : DrawBackend.VK_INDIRECT;
+        LOGGER.log(System.Logger.Level.INFO, "Sodium draw path: {0}", backend);
+        return backend;
     }
 
     /**

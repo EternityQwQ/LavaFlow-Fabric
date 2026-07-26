@@ -10,8 +10,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(PreferredGraphicsApi.class)
 abstract class PreferredGraphicsApiMixin {
+    // Development switch: leaves Minecraft's own backend selection in place so the two backends can be
+    // compared under identical instrumentation. LavaFlow's other mixins stay loaded and inert.
+    private static final boolean DISABLED = Boolean.getBoolean("lavaflow.disable");
+
     @Inject(method = "getBackendsToTry", at = @At("HEAD"), cancellable = true)
     private void lavaflow$selectBackend(CallbackInfoReturnable<GpuBackend[]> callback) {
+        if (DISABLED) return;
         callback.setReturnValue(new GpuBackend[]{new LavaFlowBackend()});
     }
 }
