@@ -53,7 +53,10 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
         if (maxMemoryAllocationSize < 0) maxMemoryAllocationSize = Long.MAX_VALUE;
         DeviceLimits blazeLimits = new DeviceLimits(maxAnisotropy, (int)limits.minUniformBufferOffsetAlignment(),
                 limits.maxImageDimension2D(), maxMemoryAllocationSize, 0, limits.maxColorAttachments());
-        DeviceFeatures features = new DeviceFeatures(false, false, false, false, false, false, true);
+        // multiDrawIndirect and drawIndirect are always advertised: LavaFlow's render pass falls back to
+        // a loop of single-draw indirect commands on devices without the core multiDrawIndirect feature,
+        // so the Blaze3D-level capability holds either way.
+        DeviceFeatures features = new DeviceFeatures(false, false, false, true, true, false, true);
         DeviceType type = switch (context.properties().deviceType()) {
             case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU -> DeviceType.INTEGRATED;
             case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> DeviceType.DISCRETE;

@@ -56,10 +56,18 @@ application {
     mainClass = "dev.lavaflow.smoke.LavaFlowSmoke"
 }
 
+// Signature-only stubs for the Sodium classes the compatibility mixins target. Sodium supplies the
+// real classes at runtime, so this output is never packaged.
+val sodiumStub by sourceSets.creating {
+    java.setSrcDirs(listOf("src/sodiumStub/java"))
+    resources.setSrcDirs(emptyList<String>())
+    compileClasspath += configurations.compileClasspath.get() + files("refs/Minecraft26.2Client.jar")
+}
+
 val minecraft by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft/java"))
     resources.setSrcDirs(listOf("src/minecraft/resources"))
-    compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get()
+    compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get() + sodiumStub.output
     runtimeClasspath += output + compileClasspath
 }
 
@@ -76,6 +84,10 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 tasks.named<JavaCompile>(minecraft.compileJavaTaskName) {
+    options.release = 25
+}
+
+tasks.named<JavaCompile>(sodiumStub.compileJavaTaskName) {
     options.release = 25
 }
 

@@ -199,6 +199,17 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         try (MemoryStack stack = stackPush()) {
             VkPipelineLayoutCreateInfo info = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
                     .pSetLayouts(stack.longs(setLayout));
+            int pushConstantSize = LavaFlowPushConstants.sizeFor(this.info);
+            if (pushConstantSize > 0) {
+                int maxPushConstantSize = device.context().properties().limits().maxPushConstantsSize();
+                if (pushConstantSize > maxPushConstantSize) {
+                    throw new IllegalStateException("Pipeline " + this.info.getLocation() + " needs "
+                            + pushConstantSize + " push-constant bytes but the device allows only "
+                            + maxPushConstantSize);
+                }
+                info.pPushConstantRanges(VkPushConstantRange.calloc(1, stack)
+                        .offset(0).size(pushConstantSize).stageFlags(VK_SHADER_STAGE_ALL));
+            }
             LongBuffer out = stack.mallocLong(1);
             check(vkCreatePipelineLayout(device.context().device(), info, null, out), "vkCreatePipelineLayout");
             return out.get(0);

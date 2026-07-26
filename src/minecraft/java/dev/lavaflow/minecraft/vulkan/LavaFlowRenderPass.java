@@ -30,7 +30,7 @@ import static org.lwjgl.vulkan.KHRPushDescriptor.vkCmdPushDescriptorSetKHR;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** Vulkan 1.1 render-pass attachment and draw state. */
-final class LavaFlowRenderPass implements RenderPassBackend {
+final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass {
     private final LavaFlowCommandEncoder encoder;
     private final LavaFlowVulkanContext context;
     private final RenderPassDescriptor descriptor;
@@ -233,6 +233,9 @@ final class LavaFlowRenderPass implements RenderPassBackend {
     }
 
     boolean hasDepth() { return descriptor.depthAttachment() != null; }
+
+    @Override public VkCommandBuffer lavaflowCommandBuffer() { return encoder.commandBuffer(); }
+    @Override public long lavaflowPipelineLayout() { return pipeline == null ? 0L : pipeline.pipelineLayout(); }
 
     @Override public void pushDebugGroup(Supplier<String> label) {}
     @Override public void popDebugGroup() {}

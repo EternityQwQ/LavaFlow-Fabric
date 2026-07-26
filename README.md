@@ -29,6 +29,7 @@ The backend includes compatibility paths for Vulkan 1.1 devices without dynamic 
 - Vulkan-native texture transfers, blits, clears, and presentation
 - Resize and swapchain recreation handling
 - Final presentation blit with the target Y coordinate reversed
+- Sodium 0.9.1 compatibility: Sodium's Vulkan terrain path runs on LavaFlow instead of falling back to OpenGL
 
 LavaFlow uses clockwise front faces and does not enable shaderc's invert-Y option. These conventions are required to match Minecraft's official Vulkan backend behavior.
 

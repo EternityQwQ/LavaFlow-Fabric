@@ -14,6 +14,9 @@ Vulkan 1.1 backend for Minecraft Blaze3D.
 [[mixins]]
 config="lavaflow.mixins.json"
 
+[[mixins]]
+config="lavaflow-sodium.mixins.json"
+
 [[dependencies.lavaflow]]
 modId="neoforge"
 type="required"
