@@ -335,8 +335,10 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
     }
 
     private void recordPipelineBind() {
+        int depthVkFormat = depthView == null ? VK_FORMAT_UNDEFINED
+                : LavaFlowVk.format(depthView.texture().getFormat());
         vkCmdBindPipeline(encoder.commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipeline.pipelineFor(hasDepth(), renderPass));
+                pipeline.pipelineFor(depthVkFormat, renderPass));
     }
 
     boolean hasDepth() { return descriptor.depthAttachment() != null; }
@@ -422,8 +424,11 @@ final class LavaFlowRenderPass implements RenderPassBackend, LavaFlowVulkanPass 
         pushDescriptors();
         VkCommandBuffer commandBuffer = encoder.commandBuffer();
         if (indexInfo.isDirect()) {
-            // Terrain batches arrive here once per region every frame; raw reads skip the per-element
-            // bounds checks of the buffer API in this innermost loop.
+            int requiredInts = drawCount * (VkMultiDrawIndexedInfoEXT.SIZEOF / Integer.BYTES);
+            if (requiredInts > indexInfo.remaining()) {
+                throw new IllegalArgumentException("drawCount " + drawCount + " requires " + requiredInts
+                        + " ints but indexInfo has only " + indexInfo.remaining() + " remaining");
+            }
             long record = MemoryUtil.memAddress(indexInfo);
             for (int draw = 0; draw < drawCount; draw++) {
                 vkCmdDrawIndexed(commandBuffer,

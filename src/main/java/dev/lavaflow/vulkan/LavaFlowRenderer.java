@@ -33,7 +33,7 @@ public final class LavaFlowRenderer implements AutoCloseable {
     private final SwapchainState swapchain = new SwapchainState();
     private FrameResources[] frames;
     private int frameIndex;
-    private boolean framebufferResized;
+    private volatile boolean framebufferResized;
     private boolean closed;
     private String deviceName;
 
@@ -576,8 +576,11 @@ public final class LavaFlowRenderer implements AutoCloseable {
         VulkanException.check(vkDeviceWaitIdle(device), "vkDeviceWaitIdle");
         long oldSwapchain = swapchain.handle;
         destroySwapchainDependents(false);
-        createSwapchainResources(oldSwapchain);
-        vkDestroySwapchainKHR(device, oldSwapchain, null);
+        try {
+            createSwapchainResources(oldSwapchain);
+        } finally {
+            vkDestroySwapchainKHR(device, oldSwapchain, null);
+        }
         for (FrameResources frame : frames) {
             frame.swapchain.put(0, swapchain.handle);
         }

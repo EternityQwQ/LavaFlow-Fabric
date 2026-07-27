@@ -40,8 +40,10 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
     private final long fragmentModule;
     private final long descriptorSetLayout;
     private final long pipelineLayout;
-    private long withDepthPipeline;
-    private long withoutDepthPipeline;
+    // Dynamic-rendering pipelines keyed by the VkFormat of the depth attachment (VK_FORMAT_UNDEFINED = no depth).
+    // Dynamic rendering requires the pipeline's depthAttachmentFormat to match the render pass, so the format
+    // is part of the cache key rather than a boolean that assumes a fixed format.
+    private final Map<Integer, Long> dynamicPipelines = new HashMap<>();
     private long[] legacyRenderPasses = new long[4];
     private long[] legacyPipelines = new long[4];
     private int legacyPipelineCount;
@@ -225,24 +227,32 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         }
     }
 
-    long pipelineFor(boolean hasDepth, long renderPass) {
+    /**
+     * Returns the pipeline to use for a draw in the given render pass.
+     *
+     * @param depthVkFormat the VkFormat of the depth attachment, or {@code VK_FORMAT_UNDEFINED} (0)
+     *                      when the pass has no depth attachment. For dynamic rendering this is part
+     *                      of the pipeline's compile-time state, so it must match the actual attachment
+     *                      format the render pass uses.
+     * @param renderPass    the legacy render pass handle, or {@code 0} for dynamic rendering.
+     */
+    long pipelineFor(int depthVkFormat, long renderPass) {
         if (closed) throw new IllegalStateException("Pipeline is closed");
         if (device.context().dynamicRendering()) {
-            long pipeline = hasDepth ? withDepthPipeline : withoutDepthPipeline;
-            return pipeline != 0 ? pipeline : createDynamicPipeline(hasDepth);
+            Long cached = dynamicPipelines.get(depthVkFormat);
+            return cached != null ? cached : createDynamicPipeline(depthVkFormat);
         }
         for (int i = 0; i < legacyPipelineCount; i++) {
             if (legacyRenderPasses[i] == renderPass) return legacyPipelines[i];
         }
-        return createLegacyPipeline(hasDepth, renderPass);
+        return createLegacyPipeline(depthVkFormat != 0, renderPass);
     }
 
-    private synchronized long createDynamicPipeline(boolean hasDepth) {
-        long pipeline = hasDepth ? withDepthPipeline : withoutDepthPipeline;
-        if (pipeline != 0) return pipeline;
-        pipeline = createGraphicsPipeline(hasDepth, 0);
-        if (hasDepth) withDepthPipeline = pipeline;
-        else withoutDepthPipeline = pipeline;
+    private synchronized long createDynamicPipeline(int depthVkFormat) {
+        Long cached = dynamicPipelines.get(depthVkFormat);
+        if (cached != null) return cached;
+        long pipeline = createGraphicsPipeline(depthVkFormat, 0);
+        dynamicPipelines.put(depthVkFormat, pipeline);
         return pipeline;
     }
 
@@ -250,7 +260,9 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         for (int i = 0; i < legacyPipelineCount; i++) {
             if (legacyRenderPasses[i] == renderPass) return legacyPipelines[i];
         }
-        long pipeline = createGraphicsPipeline(hasDepth, renderPass);
+        // For legacy render passes, depth is a binary yes/no encoded in the render pass object itself;
+        // the actual format is implicit in the render pass handle used as the key.
+        long pipeline = createGraphicsPipeline(hasDepth ? 1 : 0, renderPass);
         if (legacyPipelineCount == legacyRenderPasses.length) {
             legacyRenderPasses = Arrays.copyOf(legacyRenderPasses, legacyPipelineCount * 2);
             legacyPipelines = Arrays.copyOf(legacyPipelines, legacyPipelineCount * 2);
@@ -261,7 +273,16 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         return pipeline;
     }
 
-    private long createGraphicsPipeline(boolean hasDepth, long renderPass) {
+    /**
+     * Creates one graphics pipeline.
+     *
+     * @param depthVkFormat for dynamic rendering: the VkFormat of the depth attachment, or
+     *                      {@code VK_FORMAT_UNDEFINED} (0) for no depth. For legacy render passes:
+     *                      {@code 0} for no depth, any non-zero sentinel for "has depth" (the actual
+     *                      format is already encoded in the render pass object).
+     * @param renderPass    legacy render pass handle, or {@code 0} for dynamic rendering.
+     */
+    private long createGraphicsPipeline(int depthVkFormat, long renderPass) {
         try (MemoryStack stack = stackPush()) {
             ByteBuffer main = stack.UTF8("main");
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
@@ -322,7 +343,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
 
             VkPipelineDepthStencilStateCreateInfo depth = VkPipelineDepthStencilStateCreateInfo.calloc(stack).sType$Default();
             DepthStencilState depthState = info.getDepthStencilState();
-            if (hasDepth && depthState != null) {
+            if (depthVkFormat != 0 && depthState != null) {
                 depth.depthTestEnable(true).depthWriteEnable(depthState.writeDepth())
                         .depthCompareOp(LavaFlowVk.compareOp(depthState.depthTest()));
                 boolean bias = depthState.depthBiasConstant() != 0 || depthState.depthBiasScaleFactor() != 0;
@@ -360,7 +381,7 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
             if (device.context().dynamicRendering()) {
                 VkPipelineRenderingCreateInfoKHR rendering = VkPipelineRenderingCreateInfoKHR.calloc(stack)
                         .sType$Default().pColorAttachmentFormats(colorFormats)
-                        .depthAttachmentFormat(hasDepth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_UNDEFINED);
+                        .depthAttachmentFormat(depthVkFormat);
                 create.pNext(rendering);
             } else {
                 create.renderPass(renderPass).subpass(0);
@@ -416,14 +437,12 @@ final class LavaFlowRenderPipeline implements CompiledRenderPipeline, AutoClosea
         if (closed) return;
         closed = true;
         VkDevice vkDevice = device.context().device();
-        long depthPipeline = withDepthPipeline;
-        long noDepthPipeline = withoutDepthPipeline;
+        long[] nativeDynamicPipelines = dynamicPipelines.values().stream().mapToLong(Long::longValue).toArray();
+        dynamicPipelines.clear();
         long[] nativeLegacyPipelines = Arrays.copyOf(legacyPipelines, legacyPipelineCount);
-        withDepthPipeline = withoutDepthPipeline = 0;
         legacyPipelineCount = 0;
         device.defer(() -> {
-            if (depthPipeline != 0) vkDestroyPipeline(vkDevice, depthPipeline, null);
-            if (noDepthPipeline != 0) vkDestroyPipeline(vkDevice, noDepthPipeline, null);
+            for (long pipeline : nativeDynamicPipelines) vkDestroyPipeline(vkDevice, pipeline, null);
             for (long pipeline : nativeLegacyPipelines) vkDestroyPipeline(vkDevice, pipeline, null);
             vkDestroyPipelineLayout(vkDevice, pipelineLayout, null);
             vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout, null);

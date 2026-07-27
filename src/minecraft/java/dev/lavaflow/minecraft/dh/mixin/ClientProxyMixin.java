@@ -20,7 +20,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 abstract class ClientProxyMixin {
     @Inject(method = "afterLevelRenderEvent", at = @At("HEAD"), cancellable = true, remap = false)
     private void lavaflow$skipGlCaptureWithoutGl(RenderLevelStageEvent.AfterLevel event, CallbackInfo callback) {
-        if ("Vulkan".equalsIgnoreCase(RenderSystem.getDevice().getDeviceInfo().backendName())) {
+        com.mojang.blaze3d.systems.GpuDevice device = RenderSystem.getDevice();
+        if (device != null && "Vulkan".equalsIgnoreCase(device.getDeviceInfo().backendName())) {
             callback.cancel();
         }
     }

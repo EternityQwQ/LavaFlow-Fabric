@@ -62,7 +62,9 @@ public final class LavaFlowSodium {
      * indirect path if LavaFlow reports the interleaved capability as unavailable.
      */
     public static DrawBackend drawBackend() {
-        boolean interleaved = RenderSystem.getDevice().getDeviceInfo().features().multiDrawDirectInterleaved();
+        GpuDevice device = RenderSystem.getDevice();
+        if (device == null) return DrawBackend.VK_INDIRECT;
+        boolean interleaved = device.getDeviceInfo().features().multiDrawDirectInterleaved();
         DrawBackend backend = interleaved ? DrawBackend.VK_MULTIDRAW : DrawBackend.VK_INDIRECT;
         LOGGER.log(System.Logger.Level.INFO, "Sodium draw path: {0}", backend);
         return backend;

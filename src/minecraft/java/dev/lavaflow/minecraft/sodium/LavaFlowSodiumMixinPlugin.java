@@ -1,9 +1,11 @@
 package dev.lavaflow.minecraft.sodium;
 
+import dev.lavaflow.minecraft.MixinPluginUtil;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
@@ -16,7 +18,7 @@ public final class LavaFlowSodiumMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void onLoad(String mixinPackage) {
-        sodiumPresent = isClassPresent(SODIUM_MARKER);
+        sodiumPresent = MixinPluginUtil.isClassPresent(SODIUM_MARKER);
         System.Logger logger = System.getLogger(LavaFlowSodiumMixinPlugin.class.getName());
         logger.log(sodiumPresent ? System.Logger.Level.INFO : System.Logger.Level.DEBUG,
                 sodiumPresent
@@ -24,35 +26,14 @@ public final class LavaFlowSodiumMixinPlugin implements IMixinConfigPlugin {
                         : "Sodium not detected; skipping LavaFlow Sodium compatibility mixins");
     }
 
-    private static boolean isClassPresent(String name) {
-        // Resolved as a resource so the class is never initialized and no Sodium code runs here.
-        String resource = name.replace('.', '/') + ".class";
-        ClassLoader loader = LavaFlowSodiumMixinPlugin.class.getClassLoader();
-        if (loader != null && loader.getResource(resource) != null) return true;
-        return ClassLoader.getSystemClassLoader().getResource(resource) != null;
-    }
-
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         return sodiumPresent;
     }
 
-    @Override
-    public String getRefMapperConfig() {
-        return null;
-    }
-
-    @Override
-    public void acceptTargets(Set<String> myTargets, Set<String> otherTargets) {}
-
-    @Override
-    public List<String> getMixins() {
-        return null;
-    }
-
-    @Override
-    public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
-
-    @Override
-    public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
+    @Override public String getRefMapperConfig() { return null; }
+    @Override public void acceptTargets(Set<String> myTargets, Set<String> otherTargets) {}
+    @Override public List<String> getMixins() { return Collections.emptyList(); }
+    @Override public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
+    @Override public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {}
 }
