@@ -46,6 +46,7 @@ dependencies {
 
     testImplementation(platform("org.junit:junit-bom:5.13.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 java {
@@ -106,4 +107,33 @@ tasks.jar {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+// Tests that exercise classes in the minecraft sourceSet (Blaze3D API on the classpath).
+val minecraftTest by sourceSets.creating {
+    java.setSrcDirs(listOf("src/minecraft-test/java"))
+    resources.setSrcDirs(emptyList<String>())
+    compileClasspath += minecraft.output + minecraft.runtimeClasspath
+    runtimeClasspath += output + minecraft.output + minecraft.runtimeClasspath
+}
+
+configurations[minecraftTest.implementationConfigurationName]
+    .extendsFrom(configurations.testImplementation.get())
+configurations[minecraftTest.runtimeOnlyConfigurationName]
+    .extendsFrom(configurations.testRuntimeOnly.get())
+
+tasks.named<JavaCompile>(minecraftTest.compileJavaTaskName) {
+    options.release = 25
+}
+
+tasks.register<Test>("minecraftTest") {
+    description = "Runs unit tests for classes that depend on the Minecraft sourceSet"
+    group = "verification"
+    testClassesDirs = minecraftTest.output.classesDirs
+    classpath = minecraftTest.runtimeClasspath
+    useJUnitPlatform()
+}
+
+tasks.named("check") {
+    dependsOn("minecraftTest")
 }
