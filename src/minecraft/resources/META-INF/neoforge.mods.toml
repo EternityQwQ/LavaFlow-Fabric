@@ -4,11 +4,12 @@ license="MIT"
 
 [[mods]]
 modId="lavaflow"
-version="0.1.0-SNAPSHOT"
+version="0.1.0-alpha"
 displayName="LavaFlow"
 authors="BZLZHH"
+logoFile="lavaflow.png"
 description='''
-Vulkan 1.1 backend for Minecraft Blaze3D.
+Vulkan 1.1 graphics backend for Minecraft Blaze3D. Replaces the default rendering path with a LavaFlow-owned Vulkan 1.1 implementation — no OpenGL calls.
 '''
 
 [[mixins]]
@@ -31,5 +32,19 @@ side="CLIENT"
 modId="minecraft"
 type="required"
 versionRange="[26.2,26.3)"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.lavaflow]]
+modId="sodium"
+type="optional"
+versionRange="[0.9.1,)"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.lavaflow]]
+modId="distanthorizons"
+type="optional"
+versionRange="*"
 ordering="NONE"
 side="CLIENT"

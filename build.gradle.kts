@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "dev.lavaflow"
-version = "0.1.0-SNAPSHOT"
+version = "0.1.0-alpha"
 
 val lwjglVersion = "3.4.1"
 val lwjglArch = System.getProperty("os.arch").lowercase()
@@ -93,9 +93,7 @@ tasks.named<JavaCompile>(sodiumStub.compileJavaTaskName) {
 }
 
 tasks.jar {
-    from(minecraft.output) {
-        exclude("dev/lavaflow/natives/**")
-    }
+    from(minecraft.output)
     from("LICENSE") {
         into("META-INF")
     }
