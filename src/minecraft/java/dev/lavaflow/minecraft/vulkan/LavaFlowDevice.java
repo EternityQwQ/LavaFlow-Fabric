@@ -16,6 +16,7 @@ import java.util.*;
 import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK11.VK_API_VERSION_1_1;
 
 /** Minecraft-facing device backed only by LavaFlow-owned Vulkan objects. */
 public final class LavaFlowDevice implements GpuDeviceBackend {
@@ -104,19 +105,23 @@ public final class LavaFlowDevice implements GpuDeviceBackend {
     }
 
     /**
-     * The debug-screen driver line: the device's Vulkan version, the LavaFlow identity, and the
-     * driver version, mirroring the "1.4.341 NVIDIA 610.43.03" shape of Minecraft's own backend.
-     * The backend name itself must stay exactly "Vulkan", so this line is where both belong.
+     * The debug-screen driver line. Minecraft's debug overlay prints {@code backendName + " " +
+     * driverInfo}, and the backend name is fixed to exactly "Vulkan" (see the constructor), so this
+     * method supplies everything after that: the instance version LavaFlow requested, the highest
+     * version the physical device actually supports, the driver version, and LavaFlow's own identity,
+     * e.g. "1.1 (device 1.4.341) driver 610.43.3 LavaFlow 0.1.0-alpha".
      */
     private static String driverInfo(LavaFlowVulkanContext context) {
-        int api = context.properties().apiVersion();
+        int deviceApi = context.properties().apiVersion();
         int driver = context.properties().driverVersion();
         // NVIDIA packs its driver version 10.8.8.6 instead of Vulkan's standard 10.10.12 split.
         String driverVersion = context.properties().vendorID() == 0x10DE
                 ? (driver >>> 22) + "." + ((driver >>> 14) & 0xFF) + "." + ((driver >>> 6) & 0xFF)
                 : VK_VERSION_MAJOR(driver) + "." + VK_VERSION_MINOR(driver) + "." + VK_VERSION_PATCH(driver);
-        return VK_VERSION_MAJOR(api) + "." + VK_VERSION_MINOR(api) + "." + VK_VERSION_PATCH(api)
-                + " LavaFlow " + driverVersion;
+        return VK_VERSION_MAJOR(VK_API_VERSION_1_1) + "." + VK_VERSION_MINOR(VK_API_VERSION_1_1)
+                + " (device " + VK_VERSION_MAJOR(deviceApi) + "." + VK_VERSION_MINOR(deviceApi) + "."
+                + VK_VERSION_PATCH(deviceApi) + ") driver " + driverVersion
+                + " LavaFlow " + LavaFlowVersion.get();
     }
 
     LavaFlowVulkanContext context() { return context; }

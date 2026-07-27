@@ -68,8 +68,29 @@ val sodiumStub by sourceSets.creating {
 val minecraft by sourceSets.creating {
     java.setSrcDirs(listOf("src/minecraft/java"))
     resources.setSrcDirs(listOf("src/minecraft/resources"))
+    resources.srcDir("build/generated/lavaflowVersion")
     compileClasspath += sourceSets.main.get().output + configurations.compileClasspath.get() + sodiumStub.output
     runtimeClasspath += output + compileClasspath
+}
+
+// Writes the project version to a classpath resource LavaFlowVersion reads at runtime. Needed
+// because FML's transforming classloader never populates java.lang.Package version info from the
+// jar manifest, so Package.getImplementationVersion() always returns null for a mod's own classes.
+val generateLavaFlowVersion by tasks.registering {
+    val outputDir = layout.buildDirectory.dir("generated/lavaflowVersion")
+    val outputFile = outputDir.map { it.file("lavaflow-version.txt") }
+    inputs.property("version", project.version.toString())
+    outputs.dir(outputDir)
+    doLast {
+        outputFile.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText(project.version.toString())
+        }
+    }
+}
+
+tasks.named(minecraft.processResourcesTaskName) {
+    dependsOn(generateLavaFlowVersion)
 }
 
 configurations[minecraft.implementationConfigurationName].extendsFrom(configurations.implementation.get())
