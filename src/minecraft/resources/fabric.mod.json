@@ -5,7 +5,9 @@
   "name": "LavaFlow",
   "description": "Vulkan 1.1 graphics backend for Minecraft Blaze3D. Replaces the default rendering path with a LavaFlow-owned Vulkan 1.1 implementation — no OpenGL calls.",
   "authors": ["BZLZHH", "EternityQwQ"],
-  "contact": {},
+  "contact": {
+    "sources": "https://github.com/EternityQwQ/LavaFlow-Fabric"
+  },
   "license": "MIT",
   "icon": "lavaflow.png",
   "environment": "client",
