@@ -52,16 +52,51 @@ Vulkan 1.1
 
 ### 源码结构
 
-| 路径 | 职责 |
-| --- | --- |
-| `src/main/java/dev/lavaflow/vulkan/` | 独立 Vulkan 核心：实例/设备/交换链（`LavaFlowRenderer`、`FrameResources`、`QueueFamilies`、`SwapchainState`、`SwapchainSupport`、`VulkanException`）。无 Minecraft 类。 |
-| `src/main/java/dev/lavaflow/smoke/` | `LavaFlowSmoke`，独立的 GLFW + Vulkan 清屏循环，用于在没有 Minecraft 的情况下验证后端。 |
-| `src/minecraft/java/dev/lavaflow/minecraft/` | Fabric 适配器。`LavaFlowBackend` 实现 Blaze3D 的 `GpuBackend`；`vulkan/` 子包存放 Blaze3D Vulkan 实现（`LavaFlowDevice`、`LavaFlowGpuBuffer`、`LavaFlowGpuSampler`、`LavaFlowGpuTexture`、`LavaFlowGpuTextureView`、`LavaFlowGpuSurface`、`LavaFlowRenderPass`、`LavaFlowRenderPipeline`、`LavaFlowCommandEncoder`、`LavaFlowDescriptorCache`、`LavaFlowShaderc`、`LavaFlowVulkanPass`、`LavaFlowVulkanContext`、`LavaFlowTransientMemory`、`LavaFlowFence`、`LavaFlowQueryPool`、`LavaFlowFrameStats`、`LavaFlowPushConstants`、`LavaFlowVk`、`LavaFlowVersion` 等）。 |
-| `src/minecraft/java/dev/lavaflow/minecraft/mixin/` | 核心 mixin：`PreferredGraphicsApiMixin` 选中 LavaFlow 作为后端；`FramerateLimitMixin` 与 `FrameStatsMixin` 为由系统属性门控的开发期插桩。 |
-| `src/minecraft/java/dev/lavaflow/minecraft/sodium/` | Sodium 0.9.1 兼容。`LavaFlowSodium` 向 Sodium 暴露 LavaFlow 的设备/渲染通道；`LavaFlowSodiumMixinPlugin` 为 mixin 插件。`sodium/mixin/` 下：`DrawBackendMixin` 将 Sodium 路由至其 Vulkan 路径；`VKDrawContextMixin` 绑定 LavaFlow 的命令缓冲与管线布局；`GpuDeviceBackendAccessor`、`RenderPassBackendAccessor`、`DrawContextPassAccessor` 读取 Blaze3D 的 backend 字段。 |
-| `src/sodiumStub/java/` | Sodium 的编译期签名 stub（`net.caffeinemc.*`）。不打包；运行时由 Sodium 提供真实类。 |
-| `src/minecraft/resources/` | `fabric.mod.json` 与 mixin 配置（`lavaflow.mixins.json`、`lavaflow-sodium.mixins.json`）。 |
-| `src/minecraft-test/java/`、`src/test/java/` | 单元测试：Vulkan 重映射（`LavaFlowVkTest`、`LavaFlowPushConstantsTest`）与队列族逻辑（`QueueFamiliesTest`）。 |
+```text
+src/
+├── main/java/dev/lavaflow/
+│   ├── vulkan/                    # 独立 Vulkan 核心，无 Minecraft 类
+│   │   ├── LavaFlowRenderer.java         # 渲染器主循环
+│   │   ├── FrameResources.java           # 帧资源管理
+│   │   ├── QueueFamilies.java            # 队列族查询
+│   │   ├── SwapchainState.java           # 交换链状态
+│   │   ├── SwapchainSupport.java         # 交换链能力查询
+│   │   └── VulkanException.java          # 异常封装
+│   └── smoke/
+│       └── LavaFlowSmoke.java            # 独立 GLFW + Vulkan 清屏验证
+│
+├── minecraft/java/dev/lavaflow/minecraft/
+│   ├── LavaFlowBackend.java              # Fabric 适配器，实现 Blaze3D GpuBackend
+│   ├── vulkan/                           # Blaze3D Vulkan 实现（20+ 类）
+│   │   ├── LavaFlowDevice.java ...       # 设备、纹理、缓冲、采样器、管线等
+│   │   └── LavaFlowVersion.java          # 版本信息
+│   ├── mixin/                            # 核心 mixin
+│   │   ├── PreferredGraphicsApiMixin.java # 选中 LavaFlow 为后端
+│   │   ├── FramerateLimitMixin.java      # 帧率限制插桩（开发期，系统属性门控）
+│   │   └── FrameStatsMixin.java          # 帧统计插桩（开发期，系统属性门控）
+│   └── sodium/                           # Sodium 0.9.1 兼容
+│       ├── LavaFlowSodium.java           # 向 Sodium 暴露设备/渲染通道
+│       ├── LavaFlowSodiumMixinPlugin.java # mixin 插件
+│       └── mixin/
+│           ├── DrawBackendMixin.java     # 路由 Sodium 至 Vulkan 路径
+│           ├── VKDrawContextMixin.java   # 绑定 LavaFlow 命令缓冲与管线布局
+│           ├── GpuDeviceBackendAccessor.java
+│           ├── RenderPassBackendAccessor.java
+│           └── DrawContextPassAccessor.java # 读取 Blaze3D backend 字段
+│
+├── minecraft/resources/                 # 模组资源
+│   ├── fabric.mod.json
+│   ├── lavaflow.mixins.json              # 核心 mixin 配置
+│   └── lavaflow-sodium.mixins.json       # Sodium mixin 配置（插件门控）
+│
+├── sodiumStub/java/net/caffeinemc/       # Sodium 编译期签名 stub（不打包）
+│
+├── minecraft-test/java/                  # 需要 MC 类的单元测试
+│   └── LavaFlowVkTest.java (等)
+│
+└── test/java/                            # 纯逻辑单元测试
+    └── QueueFamiliesTest.java
+```
 
 ### Sodium 兼容说明
 
