@@ -27,32 +27,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.1.0"
-
-      - name: Download Minecraft 26.2 client references
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p refs
-          version_url=$(curl --fail --location --silent --show-error \
-            https://piston-meta.mojang.com/mc/game/version_manifest_v2.json \
-            | jq --raw-output '.versions[] | select(.id == "26.2") | .url')
-          test -n "$version_url"
-          test "$version_url" != "null"
-          version_json=$(curl --fail --location --silent --show-error "$version_url")
-          client_url=$(jq --raw-output '.downloads.client.url' <<<"$version_json")
-          client_sha1=$(jq --raw-output '.downloads.client.sha1' <<<"$version_json")
-          curl --fail --location --silent --show-error \
-            --output refs/Minecraft26.2Client.jar "$client_url"
-          echo "$client_sha1  refs/Minecraft26.2Client.jar" | sha1sum --check --strict
+          gradle-version: "9.5.1"
 
       - name: Build and test
         run: gradle --no-daemon clean test jar
 
-      - name: Upload NeoForge mod
+      - name: Upload Fabric mod
         uses: actions/upload-artifact@v4
         with:
-          name: lavaflow-neoforge
+          name: lavaflow-fabric
           path: build/libs/lavaflow-*.jar
           if-no-files-found: error
           retention-days: 14

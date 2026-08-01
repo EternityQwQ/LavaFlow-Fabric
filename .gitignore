@@ -8,3 +8,5 @@ out/
 .hmcl/
 logs/
 refs/
+run/
+.trae/

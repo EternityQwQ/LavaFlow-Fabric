@@ -12,7 +12,7 @@ LavaFlow is an experimental Vulkan 1.1 graphics backend for Minecraft's Blaze3D 
 | Component | Target |
 | --- | --- |
 | Minecraft | 26.2 |
-| Mod loader | NeoForge 26.2.0.32-beta or newer 26.2 build |
+| Mod loader | Fabric Loader 0.19.3 or newer |
 | Minecraft runtime | Java 25 |
 | Graphics API | Vulkan 1.1 |
 | Desktop smoke renderer | Java 21 bytecode |
@@ -38,7 +38,7 @@ LavaFlow uses clockwise front faces and does not enable shaderc's invert-Y optio
 ```text
 Minecraft Blaze3D API
         |
-LavaFlow NeoForge adapter
+LavaFlow Fabric adapter
         |
 LavaFlow Vulkan backend
         |
@@ -53,8 +53,9 @@ Prerequisites:
 
 - JDK 25
 - Vulkan 1.1 loader and driver
-- `refs/Minecraft26.2Client.jar` (the GitHub workflow downloads and verifies it automatically)
-- Gradle 9.1 or a compatible Gradle release
+- Gradle 9.5.1 or a compatible Gradle release
+
+Fabric Loom downloads the Minecraft 26.2 client automatically on first build.
 
 Build and test the project:
 
@@ -62,10 +63,10 @@ Build and test the project:
 gradle --no-daemon clean test jar
 ```
 
-The NeoForge mod is written to:
+The Fabric mod is written to:
 
 ```text
-build/libs/lavaflow-0.1.0-SNAPSHOT.jar
+build/libs/lavaflow-0.1.0-alpha.jar
 ```
 
 GitHub Actions runs the same build for pushes, pull requests, and manual dispatches, then publishes the JAR as a workflow artifact.
@@ -86,24 +87,16 @@ gradle run --args='--frames=120'
 
 The window should clear continuously through Vulkan and report the selected GPU and frame count in its title. Closing it exercises orderly resource teardown.
 
-## Installing on NeoForge
+## Installing on Fabric
 
-1. Copy `build/libs/lavaflow-0.1.0-SNAPSHOT.jar` to the Minecraft 26.2 instance's `mods` directory.
-2. Open the instance's `config/fml.toml` and set:
-
-```toml
-earlyWindowControl = false
-```
-
-3. Select Vulkan as the instance graphics backend.
-4. Start Minecraft with Java 25.
-
-The NeoForge early loading window must remain disabled because it creates an OpenGL GLFW window before Blaze3D selects LavaFlow. LavaFlow itself never creates or uses an OpenGL context.
+1. Copy `build/libs/lavaflow-0.1.0-alpha.jar` to the Minecraft 26.2 instance's `mods` directory.
+2. Select Vulkan as the instance graphics backend.
+3. Start Minecraft with Java 25.
 
 For FCL on Android, the typical mod path is:
 
 ```text
-/storage/emulated/0/FCL/.minecraft/versions/26.2-NeoForge/mods/
+/storage/emulated/0/FCL/.minecraft/versions/26.2-Fabric/mods/
 ```
 
 The exact instance directory can differ between launcher configurations.

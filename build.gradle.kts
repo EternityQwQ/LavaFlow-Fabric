@@ -1,6 +1,7 @@
 plugins {
     java
     application
+    id("net.fabricmc.fabric-loom") version "1.17-SNAPSHOT"
 }
 
 group = "dev.lavaflow"
@@ -38,6 +39,9 @@ dependencies {
     implementation("org.lwjgl:lwjgl-vulkan")
     implementation("org.joml:joml:1.10.8")
 
+    minecraft("com.mojang:minecraft:${property("minecraft_version")}")
+    implementation("net.fabricmc:fabric-loader:${property("loader_version")}")
+
     runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
     runtimeOnly("org.lwjgl:lwjgl-shaderc::$lwjglNatives")
@@ -62,7 +66,10 @@ application {
 val sodiumStub by sourceSets.creating {
     java.setSrcDirs(listOf("src/sodiumStub/java"))
     resources.setSrcDirs(emptyList<String>())
-    compileClasspath += configurations.compileClasspath.get() + files("refs/Minecraft26.2Client.jar")
+    // Loom wires the resolved Minecraft classes (net.minecraft:minecraft-merged-deobf) onto the
+    // main sourceSet's compileClasspath, so reusing it gives the stubs the MC types they need.
+    // (The `minecraft` configuration itself is a non-resolvable bucket, so it can't be used directly.)
+    compileClasspath += configurations.compileClasspath.get()
 }
 
 val minecraft by sourceSets.creating {
@@ -95,9 +102,13 @@ tasks.named(minecraft.processResourcesTaskName) {
 
 configurations[minecraft.implementationConfigurationName].extendsFrom(configurations.implementation.get())
 
-dependencies {
-    add(minecraft.implementationConfigurationName, files("refs/Minecraft26.2Client.jar"))
-    add(minecraft.compileOnlyConfigurationName, "net.fabricmc:sponge-mixin:0.17.3+mixin.0.8.7")
+loom {
+    mods {
+        create("lavaflow") {
+            sourceSet(sourceSets["minecraft"])
+        }
+    }
+    fabricModJsonPath = file("src/minecraft/resources/fabric.mod.json")
 }
 
 tasks.withType<JavaCompile>().configureEach {
