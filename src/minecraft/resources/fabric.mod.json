@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "lavaflow",
+  "version": "0.1.0-alpha",
+  "name": "LavaFlow",
+  "description": "Vulkan 1.1 graphics backend for Minecraft Blaze3D. Replaces the default rendering path with a LavaFlow-owned Vulkan 1.1 implementation — no OpenGL calls.",
+  "authors": ["BZLZHH", "EternityQwQ"],
+  "contact": {},
+  "license": "MIT",
+  "icon": "lavaflow.png",
+  "environment": "client",
+  "entrypoints": {},
+  "mixins": ["lavaflow.mixins.json", "lavaflow-sodium.mixins.json"],
+  "depends": { "fabricloader": ">=0.19.3", "minecraft": ">=26.2 <26.3", "java": ">=25" },
+  "recommends": { "sodium": ">=0.9.1" }
+}
